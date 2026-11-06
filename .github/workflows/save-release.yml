@@ -1,0 +1,51 @@
+name: Save approved private macOS release
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+jobs:
+  save:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: BRollFinder-macOS-AppleSilicon
+          run-id: 42180495873
+          github-token: ${{ github.token }}
+          path: release
+      - uses: actions/download-artifact@v8
+        with:
+          name: macOS-DMG-validation
+          run-id: 42182174344
+          github-token: ${{ github.token }}
+          path: qa
+      - name: Verify tested files and package evidence
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, shutil
+          dmg=pathlib.Path('release/BRollFinder-Studio-macOS-AppleSilicon.dmg')
+          digest=hashlib.sha256(dmg.read_bytes()).hexdigest()
+          assert digest=='95ce261f942060c9b1df3d581e583070879aaac6982416342b2eba7dac30dc72'
+          report=json.loads(pathlib.Path('qa/dmg-validation.json').read_text())
+          assert report['status']=='PASSED_DMG_AND_FINDER' and report['dmg_sha256']==digest
+          shutil.make_archive('release/macOS-validation','zip','qa')
+          pathlib.Path('release/SHA256SUMS.txt').write_text(digest+'  '+dmg.name+'\n')
+          PY
+      - name: Save approved draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat > release/RELEASE-NOTES.txt <<'NOTES'
+          Apple Silicon, macOS 14 or later. Tested on macOS 15.8.2 ARM64.
+          Native Cocoa UI, dependencies, analysis/cutting, manifest round trip,
+          read-only DMG, and Finder/LaunchServices launch checks passed.
+          Open DMG and drag B-Roll Finder Studio.app into Applications.
+          Not signed with Apple Developer ID or notarized.
+          Online provider/API access and full Whisper model transcription were not tested.
+          Build: https://github.com/Linhtybg123/broll-finder-macos/actions/runs/42180495873
+          Validation: https://github.com/Linhtybg123/broll-finder-macos/actions/runs/42182174344
+          NOTES
+          gh release create v2.0.0-macos-20261106 --draft --title 'B-Roll Finder Studio 2.0 - macOS Apple Silicon' --notes-file release/RELEASE-NOTES.txt release/BRollFinder-Studio-macOS-AppleSilicon.dmg release/macOS-validation.zip release/SHA256SUMS.txt
