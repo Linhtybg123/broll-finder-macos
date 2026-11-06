@@ -1,0 +1,65 @@
+name: Validate delivered DMG and Finder launch
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          architecture: arm64
+      - uses: actions/download-artifact@v8
+        with:
+          name: BRollFinder-macOS-AppleSilicon
+          run-id: 42180495873
+          github-token: ${{ github.token }}
+          path: release
+      - name: Verify mounted DMG and Finder launch
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, platform, shutil, subprocess, sys, time, zipfile
+          assert sys.platform == 'darwin' and platform.machine() == 'arm64'
+          with zipfile.ZipFile('BRollFinder-macOS-Build-Source.zip') as archive:
+              archive.extractall('source')
+          qa = pathlib.Path('source/qa')
+          qa.mkdir(exist_ok=True)
+          dmg = pathlib.Path('release/BRollFinder-Studio-macOS-AppleSilicon.dmg')
+          digest = hashlib.sha256(dmg.read_bytes()).hexdigest()
+          mount = pathlib.Path(os.environ['RUNNER_TEMP']) / 'broll-dmg'
+          mount.mkdir()
+          subprocess.run(['hdiutil','verify',str(dmg)],check=True)
+          subprocess.run(['hdiutil','attach',str(dmg),'-readonly','-nobrowse','-mountpoint',str(mount)],check=True)
+          try:
+              app = mount / 'B-Roll Finder Studio.app'
+              assert (app/'Contents/Resources/AppIcon.icns').is_file()
+              assert (mount/'Applications').is_symlink()
+              subprocess.run([sys.executable,'source/tools/test_macos.py','--app',str(app)],check=True,timeout=240)
+              started = time.time()
+              subprocess.run(['/usr/bin/open','-W','-n',str(app),'--args','--studio-qa'],check=True,timeout=120)
+              evidence = pathlib.Path.home()/'Library/Logs/BRollFinder/qa'
+              report_file = evidence/'report.json'
+              assert report_file.stat().st_mtime >= started
+              report = json.loads(report_file.read_text())
+              assert report['ok'] and report['voice_samples_preserved'] == 128000
+              shutil.copytree(evidence,qa/'finder-launch')
+              result = {'status':'PASSED_DMG_AND_FINDER','platform':platform.platform(),'dmg_sha256':digest,'dmg_bytes':dmg.stat().st_size,'checks':['DMG integrity','read-only mounted app','native dependencies','Cocoa UI','Finder/LaunchServices launch','analyze and cut audio','manifest round trip']}
+              (qa/'dmg-validation.json').write_text(json.dumps(result,indent=2))
+              print(json.dumps(result,indent=2))
+          finally:
+              subprocess.run(['hdiutil','detach',str(mount)],check=True)
+          PY
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macOS-DMG-validation
+          path: source/qa/
+          retention-days: 1
