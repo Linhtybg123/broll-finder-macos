@@ -39,6 +39,7 @@ jobs:
           python -m pip download --only-binary=:all: --require-hashes --no-deps --platform macosx_14_0_arm64 --python-version 3.14 --implementation cp --abi cp314 --abi abi3 -r requirements-lock.txt -d downloads/wheels
       - name: Assemble application bundle
         run: |
+          mkdir -p qa
           python tools/assemble_app.py
           python tools/verify_package.py
       - name: Extract with macOS permissions and symlinks
