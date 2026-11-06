@@ -1,0 +1,66 @@
+name: Build and test B-Roll Finder on Apple Silicon
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: broll-macos-build
+  cancel-in-progress: false
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: source
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+          architecture: arm64
+      - name: Unpack verified build source
+        working-directory: .
+        run: |
+          python - <<'PY'
+          import hashlib, pathlib, zipfile
+          bundle = pathlib.Path('BRollFinder-macOS-Build-Source.zip')
+          assert hashlib.sha256(bundle.read_bytes()).hexdigest() == '006c8c8517ce9e5c8cbf5b19d22fab6d6e54b00e83f936c6d2d837559dcb440e'
+          with zipfile.ZipFile(bundle) as archive:
+              archive.extractall('source')
+          PY
+      - name: Verify Apple Silicon host
+        run: python -c "import platform,sys; assert sys.platform == 'darwin' and platform.machine() == 'arm64'"
+      - name: Fetch verified runtime and dependency wheels
+        run: |
+          python tools/download_runtime.py
+          python -m pip download --only-binary=:all: --require-hashes --no-deps --platform macosx_14_0_arm64 --python-version 3.14 --implementation cp --abi cp314 --abi abi3 -r requirements-lock.txt -d downloads/wheels
+      - name: Assemble application bundle
+        run: |
+          python tools/assemble_app.py
+          python tools/verify_package.py
+      - name: Extract with macOS permissions and symlinks
+        run: ditto -x -k output/BRollFinder-Studio-macOS-AppleSilicon-UNTESTED.zip output/native
+      - name: Run native Cocoa UI and functional checks
+        run: python tools/test_macos.py --app 'output/native/B-Roll Finder Studio.app'
+      - name: Package tested disk image
+        run: |
+          ln -s /Applications output/native/Applications
+          hdiutil create -volname 'B-Roll Finder Studio' -srcfolder output/native -ov -format UDZO output/BRollFinder-Studio-macOS-AppleSilicon.dmg
+      - name: Upload tested release
+        uses: actions/upload-artifact@v7
+        with:
+          name: BRollFinder-macOS-AppleSilicon
+          path: source/output/*.dmg
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+      - name: Upload QA evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macOS-test-evidence
+          path: source/qa/
+          retention-days: 1
