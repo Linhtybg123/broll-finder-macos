@@ -54,7 +54,12 @@ jobs:
               (qa/'dmg-validation.json').write_text(json.dumps(result,indent=2))
               print(json.dumps(result,indent=2))
           finally:
-              subprocess.run(['hdiutil','detach',str(mount)],check=True)
+              for attempt in range(10):
+                  if subprocess.run(['hdiutil','detach',str(mount)]).returncode == 0:
+                      break
+                  time.sleep(2)
+              else:
+                  subprocess.run(['hdiutil','detach','-force',str(mount)],check=True)
           PY
       - name: Upload validation evidence
         if: always()
